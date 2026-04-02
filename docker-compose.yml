@@ -1,0 +1,31 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq-test-broker
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  backend:
+    build: 
+      context: .
+      dockerfile: BackendManager/Dockerfile
+    container_name: rabbitmq-test-backend
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+    ports:
+      - "4000:4000"
+    depends_on:
+      - rabbitmq
+
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: rabbitmq-test-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend

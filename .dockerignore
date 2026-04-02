@@ -1,0 +1,45 @@
+# VCS and local tooling
+.git/
+.gitignore
+.dockerignore
+.idea/
+.vscode/
+.vs/
+.DS_Store
+Thumbs.db
+
+# Frontend is built from its own Docker context
+frontend/
+
+# .NET build output and local IDE state
+**/bin/
+**/obj/
+**/TestResults/
+**/*.user
+**/*.rsuser
+**/*.suo
+**/*.userosscache
+**/*.sln.docstates
+*.coverage
+
+# Package caches and generated assets
+**/node_modules/
+**/dist/
+**/dist-ssr/
+**/build/
+**/coverage/
+**/.vite/
+**/.eslintcache
+
+# Local logs and env files
+logs/
+**/logs/
+**/*.log
+.env
+.env.*
+!.env.example
+!.env*.example
+
+# Repo-only docs and orchestration files
+DOCKER_GUIDE.md
+docker-compose*.yml
