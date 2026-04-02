@@ -1,96 +1,164 @@
 using Microsoft.AspNetCore.SignalR;
-using System.Diagnostics;
 using System.Collections.Concurrent;
 
 namespace BackendManager.Services
 {
-    public class ProcessManager
+    public class ProcessManager : IHostedService
     {
         private readonly IHubContext<ConsoleHub> _hubContext;
-        private readonly ConcurrentDictionary<string, Process> _runningProcesses = new();
+        private readonly RabbitMqModuleCatalog _moduleCatalog;
+        private readonly ILogger<ProcessManager> _logger;
+        private readonly ConcurrentDictionary<string, RunningModule> _runningModules = new(StringComparer.OrdinalIgnoreCase);
 
-        public ProcessManager(IHubContext<ConsoleHub> hubContext)
+        public ProcessManager(
+            IHubContext<ConsoleHub> hubContext,
+            RabbitMqModuleCatalog moduleCatalog,
+            ILogger<ProcessManager> logger)
         {
             _hubContext = hubContext;
+            _moduleCatalog = moduleCatalog;
+            _logger = logger;
         }
 
-        public async Task StartModule(string moduleName)
+        public Task StartAsync(CancellationToken cancellationToken)
         {
-            if (_runningProcesses.ContainsKey(moduleName))
-            {
-                await _hubContext.Clients.All.SendAsync("ReceiveLog", moduleName, "[System] Module is already running.");
-                return;
-            }
-
-            var projectPath = Path.Combine("..", moduleName);
-            if (!Directory.Exists(projectPath))
-            {
-                // In Docker, the projects will be at /app, and the backend is running at /app/BackendManager
-                projectPath = Path.Combine("/app", moduleName);
-                if (!Directory.Exists(projectPath))
-                {
-                    // Fallback to local
-                    projectPath = Path.Combine("..", moduleName);
-                }
-            }
-
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "dotnet",
-                Arguments = $"run --project \"{projectPath}\"",
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            var process = new Process { StartInfo = startInfo, EnableRaisingEvents = true };
-
-            process.OutputDataReceived += async (sender, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                {
-                    await _hubContext.Clients.All.SendAsync("ReceiveLog", moduleName, e.Data);
-                }
-            };
-
-            process.ErrorDataReceived += async (sender, e) =>
-            {
-                if (!string.IsNullOrEmpty(e.Data))
-                {
-                    await _hubContext.Clients.All.SendAsync("ReceiveLog", moduleName, $"[ERROR] {e.Data}");
-                }
-            };
-
-            process.Exited += async (sender, e) =>
-            {
-                _runningProcesses.TryRemove(moduleName, out _);
-                await _hubContext.Clients.All.SendAsync("ReceiveLog", moduleName, "[System] Module stopped.");
-            };
-
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-            
-            _runningProcesses.TryAdd(moduleName, process);
-            await _hubContext.Clients.All.SendAsync("ReceiveLog", moduleName, "[System] Module started.");
+            return Task.CompletedTask;
         }
 
-        public async Task StopModule(string moduleName)
+        public async Task<ModuleCommandResult> StartModule(string moduleName)
         {
-            if (_runningProcesses.TryGetValue(moduleName, out var process))
+            if (!_moduleCatalog.IsSupported(moduleName))
             {
-                try
-                {
-                    process.Kill(true);
-                    _runningProcesses.TryRemove(moduleName, out _);
-                    await _hubContext.Clients.All.SendAsync("ReceiveLog", moduleName, "[System] Module stopped by user.");
-                }
-                catch (Exception ex)
-                {
-                    await _hubContext.Clients.All.SendAsync("ReceiveLog", moduleName, $"[ERROR] Failed to stop: {ex.Message}");
-                }
+                return ModuleCommandResult.NotFound($"Module {moduleName} is not supported.");
             }
+
+            var runningModule = new RunningModule(moduleName);
+            if (!_runningModules.TryAdd(moduleName, runningModule))
+            {
+                await WriteLogAsync(moduleName, "[System] Module is already running.");
+                return ModuleCommandResult.Conflict($"Module {moduleName} is already running.");
+            }
+
+            await WriteLogAsync(moduleName, "[System] Module started.");
+
+            runningModule.ExecutionTask = Task.Run(
+                () => RunModuleAsync(runningModule),
+                CancellationToken.None);
+
+            return ModuleCommandResult.Accepted($"Module {moduleName} started.");
+        }
+
+        public async Task<ModuleCommandResult> StopModule(string moduleName)
+        {
+            if (!_moduleCatalog.IsSupported(moduleName))
+            {
+                return ModuleCommandResult.NotFound($"Module {moduleName} is not supported.");
+            }
+
+            if (!_runningModules.TryGetValue(moduleName, out var runningModule))
+            {
+                await WriteLogAsync(moduleName, "[System] Module is not running.");
+                return ModuleCommandResult.NotFound($"Module {moduleName} is not running.");
+            }
+
+            await WriteLogAsync(moduleName, "[System] Stop requested.");
+            runningModule.CancellationTokenSource.Cancel();
+
+            try
+            {
+                await runningModule.ExecutionTask;
+            }
+            catch (OperationCanceledException) when (runningModule.CancellationTokenSource.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Module {ModuleName} stopped with an exception.", moduleName);
+            }
+
+            return ModuleCommandResult.Accepted($"Module {moduleName} stop requested.");
+        }
+
+        public async Task StopAsync(CancellationToken cancellationToken)
+        {
+            var runningModules = _runningModules.Values.ToArray();
+            foreach (var runningModule in runningModules)
+            {
+                runningModule.CancellationTokenSource.Cancel();
+            }
+
+            try
+            {
+                await Task.WhenAll(runningModules.Select(module => module.ExecutionTask)).WaitAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "An exception occurred while stopping background modules.");
+            }
+        }
+
+        private async Task RunModuleAsync(RunningModule runningModule)
+        {
+            try
+            {
+                var context = new ModuleExecutionContext(
+                    runningModule.Name,
+                    message => WriteLogAsync(runningModule.Name, message),
+                    runningModule.CancellationTokenSource.Token);
+
+                await _moduleCatalog.RunModuleAsync(runningModule.Name, context);
+            }
+            catch (OperationCanceledException) when (runningModule.CancellationTokenSource.IsCancellationRequested)
+            {
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Module {ModuleName} failed.", runningModule.Name);
+                await WriteLogAsync(runningModule.Name, $"[ERROR] {ex.Message}");
+            }
+            finally
+            {
+                if (_runningModules.TryRemove(runningModule.Name, out var removedModule))
+                {
+                    removedModule.CancellationTokenSource.Dispose();
+                }
+                else
+                {
+                    runningModule.CancellationTokenSource.Dispose();
+                }
+
+                await WriteLogAsync(runningModule.Name, "[System] Module stopped.");
+            }
+        }
+
+        private async Task WriteLogAsync(string moduleName, string message)
+        {
+            _logger.LogInformation("{ModuleName}: {Message}", moduleName, message);
+
+            try
+            {
+                await _hubContext.Clients.All.SendAsync("ReceiveLog", moduleName, message);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to broadcast log for {ModuleName}.", moduleName);
+            }
+        }
+
+        private sealed class RunningModule
+        {
+            public RunningModule(string name)
+            {
+                Name = name;
+                CancellationTokenSource = new CancellationTokenSource();
+            }
+
+            public string Name { get; }
+            public CancellationTokenSource CancellationTokenSource { get; }
+            public Task ExecutionTask { get; set; } = Task.CompletedTask;
         }
     }
 }

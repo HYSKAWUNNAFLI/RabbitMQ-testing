@@ -1,0 +1,21 @@
+# Bỏ qua các thư mục build ở local
+**/bin/
+**/obj/
+**/out/
+**/publish/
+
+# Bỏ qua log và môi trường
+**/logs/
+*.log
+.env
+
+# Bỏ qua cấu hình IDE
+.vscode/
+.vs/
+.idea/
+*.user
+*.suo
+
+# Bỏ qua Git
+.git/
+.gitignore

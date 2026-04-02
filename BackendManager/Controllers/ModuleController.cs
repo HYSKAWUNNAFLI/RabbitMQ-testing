@@ -17,15 +17,15 @@ namespace BackendManager.Controllers
         [HttpPost("start/{moduleName}")]
         public async Task<IActionResult> StartModule(string moduleName)
         {
-            await _processManager.StartModule(moduleName);
-            return Ok(new { message = $"Module {moduleName} started." });
+            var result = await _processManager.StartModule(moduleName);
+            return StatusCode(result.StatusCode, new { message = result.Message });
         }
 
         [HttpPost("stop/{moduleName}")]
         public async Task<IActionResult> StopModule(string moduleName)
         {
-            await _processManager.StopModule(moduleName);
-            return Ok(new { message = $"Module {moduleName} stopped." });
+            var result = await _processManager.StopModule(moduleName);
+            return StatusCode(result.StatusCode, new { message = result.Message });
         }
     }
 }

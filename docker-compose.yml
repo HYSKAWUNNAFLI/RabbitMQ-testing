@@ -9,9 +9,7 @@ services:
       - "15672:15672"
 
   backend:
-    build: 
-      context: .
-      dockerfile: BackendManager/Dockerfile
+    image: dwctran/ductranhehe:backend   # Kéo image từ Docker Hub
     container_name: rabbitmq-test-backend
     environment:
       - RABBITMQ_HOST=rabbitmq
@@ -21,9 +19,7 @@ services:
       - rabbitmq
 
   frontend:
-    build: 
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: dwctran/ductranhehe:frontend  # Kéo image từ Docker Hub
     container_name: rabbitmq-test-frontend
     ports:
       - "3000:80"

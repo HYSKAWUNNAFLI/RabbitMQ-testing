@@ -4,7 +4,9 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
+builder.Services.AddSingleton<RabbitMqModuleCatalog>();
 builder.Services.AddSingleton<ProcessManager>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcessManager>());
 
 builder.Services.AddCors(options =>
 {

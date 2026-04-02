@@ -10,6 +10,13 @@ Thumbs.db
 
 # Frontend is built from its own Docker context
 frontend/
+Send/
+Receive/
+Receivelogs/
+Emitlog/
+Worker/
+NewTask/
+RabbitMQ testing.sln
 
 # .NET build output and local IDE state
 **/bin/
